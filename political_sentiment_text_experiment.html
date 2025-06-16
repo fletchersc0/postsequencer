@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Truth Judgment Task (Text)</title>
+
+  <style>
+    :root {
+      --bg: #000;
+      --fg: #fff;
+      --input-bg: #1a1a1a;
+      --border-color:#444;
+    }
+    *      { box-sizing:border-box; }
+    html,body{
+      margin:0;
+      font-family:system-ui,sans-serif;
+      background:var(--bg);
+      color:var(--fg);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      min-height:100vh;
+      text-align:center;
+    }
+    #stage{
+      width:92%;
+      max-width:860px;
+      padding:2rem;
+    }
+    button,
+    input[type=text],
+    input[type=number],
+    select {
+      font-size:1rem;
+      padding:.5rem 1rem;
+      margin:.3rem;
+      background:var(--input-bg);
+      color:var(--fg);
+      border:1px solid var(--border-color);
+    }
+    button{
+      cursor:pointer;
+      background:#222;
+    }
+    button:hover{
+      background:#333;
+      border-color:#555;
+    }
+    .fixation-cross-container{
+      font-size:3rem;
+      height:6em; 
+      display:flex;align-items:center;justify-content:center;
+    }
+    .stimulus-container, .feedback-container, .message-container {
+      min-height:12em; 
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      padding: 1em;
+    }
+    .stimulus-text { /* New style for text stimuli */
+      font-size: 1.8rem; /* Adjust as needed */
+      line-height: 1.4;
+      margin-bottom: 1em;
+      max-width: 90%; /* Ensure text wraps nicely */
+    }
+    .feedback-text { font-size:1.2rem; }
+    .instructions-text, .message-text { font-size:1.1rem; line-height:1.6; margin-bottom:1em;}
+    .key-reminder { font-size:1rem; color: #ccc; margin-top: 1em;}
+    .loading, .error-text { font-size:1.2rem; color: #aaa; }
+    .input-label { display: block; margin-top: 1em; margin-bottom: 0.2em; }
+  </style>
+</head>
+<body>
+  <div id="stage">Loading experiment...</div>
+
+<script>
+// -------------------- CONFIG --------------------
+const CONFIG = {
+  experimentName         : 'Political Sentiment Truth Judgment Task (Text)',
+  csvFile                : 'stimulus_master.csv', // Will be processed according to the new structure
+  responseKeys           : { true_key: 'f', false_key: 'j' }, 
+  dataPipeID             : 'qWHxwr6D720q', 
+  fallbackDownload       : true, 
+  
+  fixationCrossDuration  : 500,
+  statementTimeoutDuration: 15000,
+  feedbackDuration       : 1500, 
+  timeoutFeedbackDuration: 2000,
+  itiMinDuration         : 500,
+  itiMaxDuration         : 1000,
+  
+  numPracticeTrials      : 6, // Adjusted, can be tuned
+  numTrialsPerCell       : 8,    
+  trialsPerBreak         : 30,   
+
+  sentiments             : ['Positive', 'Neutral', 'Negative'], // These must match how they're assigned from CSV
+  truthValues            : ['True', 'False'], 
+  congruenceLevels       : ['Congruent', 'Incongruent'],
+
+  masterHeader : [ // image_filename removed
+    'prolific_id', 'political_orientation', 
+    'trial_number_overall', 'block_type', 'trial_number_in_block',
+    'statement_id', 'statement_text', 
+    'sentiment', 'truth_value_stimulus', 'partisan_alignment_stimulus', 'partisan_congruence',
+    'is_practice_trial', 'is_attention_check',
+    'response', 'accuracy', 'rt_ms',
+    'timestamp'
+  ]
+};
+
+// ------------------------ STATE OBJECT ------------------------
+const state = {
+  prolificID          : '',
+  politicalOrientation: '',
+  allStimuli          : [], 
+  practiceStimuli     : [], 
+  mainExperimentStimuli: [],
+  data                : [],
+  trialCountOverall   : 0,
+  currentBlock        : '',
+  currentTrialInBlock : 0,
+};
+
+const stage = document.getElementById('stage');
+let rtClock = 0;
+
+// ------------------------ UTILITY FUNCTIONS ------------------------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const shuffle = arr => { for(let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
+const show = html => stage.innerHTML = html;
+const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+// IMAGE PRELOADER REMOVED
+
+// ------------------------ DATA LOGGING FUNCTIONS ------------------------
+function log(dataRow) {
+  dataRow.timestamp = new Date().toISOString();
+  const completeRow = {};
+  CONFIG.masterHeader.forEach(header => {
+    completeRow[header] = (header in dataRow) ? dataRow[header] : '';
+  });
+  state.data.push(completeRow);
+}
+
+function toCSV(rows){
+  if (!rows.length) return '';
+  const header = CONFIG.masterHeader;
+  const lines  = [header.join(',')];
+  rows.forEach(r => {
+    const line = header.map(k => {
+      let cell = (k in r && r[k] !== null && r[k] !== undefined) ? r[k] : '';
+      cell = String(cell).trim(); 
+      if (/[",\n\r]/.test(cell)) cell = '"' + cell.replace(/"/g, '""') + '"';
+      return cell;
+    }).join(',');
+    lines.push(line);
+  });
+  return lines.join('\n');
+}
+
+function uploadCSV(filename, csvData){
+  if (!CONFIG.dataPipeID || CONFIG.dataPipeID === 'YOUR_JSPSYCH_DATAPIPE_ID') {
+      console.warn("DataPipeID not set or is placeholder. Skipping upload.");
+      return Promise.resolve({ok: false, statusText: "DataPipeID not set"});
+  }
+  return fetch('https://pipe.jspsych.org/api/data/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experimentID: CONFIG.dataPipeID, filename: filename, data: csvData })
+  });
+}
+
+function downloadCSV(csvData, filename){
+  const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ------------------- STIMULUS LOADER (NEW LOGIC) -------------------
+async function loadCSVStimuli(){
+  const response = await fetch(CONFIG.csvFile);
+  if (!response.ok) throw new Error(`Failed to load ${CONFIG.csvFile}: ${response.statusText}`);
+  const txt = await response.text();
+  let lines = txt.trim().split(/\r?\n/);
+  
+  let delimiter = ",";
+  if (lines.length > 0 && lines[0].includes("\t") && lines[0].split("\t").length > lines[0].split(",").length) {
+      delimiter = "\t";
+  }
+
+  const headerLine = lines.shift();
+  const header = headerLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase()); // lowercasing headers for easier matching
+
+  // Expected headers from user's CSV
+  const expectedCsvHeaders = ['item', 'positive', 'neutral', 'negative', 'veracity', 'party'];
+  for (const reqHeader of expectedCsvHeaders) {
+      if (!header.includes(reqHeader)) {
+          throw new Error(`CSV file is missing required header: '${reqHeader}'. Found headers: ${header.join(', ')}`);
+      }
+  }
+  
+  lines.forEach((line, index) => {
+    if (line.trim() === "") return; 
+
+    let fields = [];
+    if (delimiter === ",") {
+        let current = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"' && (i === 0 || line[i-1] !== '\\')) { 
+                inQuotes = !inQuotes;
+            } else if (char === delimiter && !inQuotes) {
+                fields.push(current.trim().replace(/^"|"$/g, '')); current = '';
+            } else {
+                current += char;
+            }
+        }
+        fields.push(current.trim().replace(/^"|"$/g, ''));
+    } else { 
+        fields = line.split(delimiter).map(f => f.trim().replace(/^"|"$/g, ''));
+    }
+
+    const rawStim = {};
+    header.forEach((h, i) => rawStim[h] = (fields[i] !== undefined ? fields[i] : '').trim());
+
+    const itemNum = rawStim.item;
+    if (!itemNum) {
+        console.warn(`Skipping CSV row ${index + 2} due to missing 'Item' number.`);
+        return;
+    }
+
+    const truthValue = rawStim.veracity.toUpperCase() === 'TRUE';
+    let partisanAlignment;
+    if (rawStim.party.toLowerCase() === 'republican') {
+        partisanAlignment = 'Right';
+    } else if (rawStim.party.toLowerCase() === 'democrat') {
+        partisanAlignment = 'Left';
+    } else {
+        console.warn(`Unknown party '${rawStim.party}' for Item ${itemNum}. Defaulting to Neutral/Undefined.`);
+        partisanAlignment = 'Neutral'; // Or handle as error
+    }
+
+    const sentimentsToProcess = ['positive', 'neutral', 'negative'];
+    sentimentsToProcess.forEach(sentimentType => {
+        const statementText = rawStim[sentimentType];
+        if (statementText) {
+            state.allStimuli.push({
+                statement_id: `item${itemNum}_${sentimentType}`,
+                statement_text: statementText,
+                sentiment: sentimentType.charAt(0).toUpperCase() + sentimentType.slice(1), // Capitalize: Positive, Neutral, Negative
+                truth_value: truthValue,
+                partisan_alignment: partisanAlignment,
+                is_practice_stimulus: false, // Will be determined later
+                is_attention_check: false,   // Not defined in this CSV structure
+            });
+        } else {
+            console.warn(`Missing '${sentimentType}' statement for Item ${itemNum}.`);
+        }
+    });
+  });
+
+  console.log(`Generated ${state.allStimuli.length} stimuli from CSV.`);
+  const totalCells = CONFIG.sentiments.length * CONFIG.congruenceLevels.length * CONFIG.truthValues.length;
+  const minNeededForMain = totalCells * CONFIG.numTrialsPerCell;
+   if (state.allStimuli.length < minNeededForMain + CONFIG.numPracticeTrials) {
+    console.warn(`Potentially insufficient total stimuli generated (${state.allStimuli.length}). Needed at least ${minNeededForMain + CONFIG.numPracticeTrials} for main task and practice.`);
+  }
+}
+
+// ------------------- KEYBOARD HELPERS (Unchanged) -------------------
+function waitKeys(validKeys) {
+  return new Promise(resolve => {
+    function onKey(e) {
+      const key = e.key.toLowerCase();
+      if (validKeys.includes(key)) {
+        document.removeEventListener('keydown', onKey);
+        resolve(key);
+      }
+    }
+    document.addEventListener('keydown', onKey);
+  });
+}
+
+function waitKeysOrTimeout(validKeys, timeoutMs) {
+  return new Promise(resolve => {
+    let timeoutId = null;
+    function onKey(e) {
+      const key = e.key.toLowerCase();
+      if (validKeys.includes(key)) {
+        if (timeoutId) clearTimeout(timeoutId);
+        document.removeEventListener('keydown', onKey);
+        resolve({ key: key, timedOut: false });
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    timeoutId = setTimeout(() => {
+      document.removeEventListener('keydown', onKey);
+      resolve({ key: null, timedOut: true });
+    }, timeoutMs);
+  });
+}
+
+// ------------------- STIMULUS PREPARATION & COUNTERBALANCING -------------------
+function prepareExperimentTrials() {
+    if (state.allStimuli.length === 0) {
+        throw new Error("No stimuli loaded or generated. Cannot prepare trials.");
+    }
+    shuffle(state.allStimuli); 
+
+    // 1. Select Practice Stimuli Randomly
+    if (state.allStimuli.length < CONFIG.numPracticeTrials) {
+        throw new Error(`Not enough total stimuli (${state.allStimuli.length}) to select ${CONFIG.numPracticeTrials} for practice.`);
+    }
+    state.practiceStimuli = state.allStimuli.slice(0, CONFIG.numPracticeTrials);
+    // Mark them as practice and ensure they are not re-used in main task easily if we sample from a copy
+    state.practiceStimuli.forEach(s => s.is_practice_stimulus = true);
+    
+    const availableForMain = state.allStimuli.filter(s => !state.practiceStimuli.find(p => p.statement_id === s.statement_id));
+    shuffle(availableForMain); // Shuffle the pool for main experiment
+
+    // 2. Assign Congruence and Prepare Cells for Main Experiment
+    const cells = {}; 
+    CONFIG.sentiments.forEach(sent => {
+        cells[sent] = {};
+        CONFIG.congruenceLevels.forEach(cong => {
+            cells[sent][cong] = {};
+            CONFIG.truthValues.forEach(truth => { 
+                cells[sent][cong][truth] = [];
+            });
+        });
+    });
+
+    availableForMain.forEach(stim => {
+        let congruence;
+        if (stim.partisan_alignment === 'Neutral' || !stim.partisan_alignment) { 
+            congruence = Math.random() < 0.5 ? 'Congruent' : 'Incongruent'; 
+        } else if (state.politicalOrientation === 'Left-leaning') {
+            congruence = stim.partisan_alignment === 'Left' ? 'Congruent' : 'Incongruent';
+        } else if (state.politicalOrientation === 'Right-leaning') {
+            congruence = stim.partisan_alignment === 'Right' ? 'Congruent' : 'Incongruent';
+        } else {
+            console.error("Political orientation not set or invalid for congruence assignment.");
+            congruence = 'ErrorCongruence'; 
+        }
+        
+        const truthKey = stim.truth_value ? 'True' : 'False'; 
+        if (cells[stim.sentiment] && cells[stim.sentiment][congruence] && cells[stim.sentiment][congruence][truthKey]) {
+             cells[stim.sentiment][congruence][truthKey].push({...stim, partisan_congruence: congruence});
+        } else {
+            console.warn(`Could not categorize stimulus for cell assignment: ID ${stim.statement_id}, Sentiment ${stim.sentiment}, Congruence ${congruence}, Truth ${truthKey}, Partisan Alignment ${stim.partisan_alignment}`);
+        }
+    });
+
+    // 3. Sample from Cells
+    state.mainExperimentStimuli = [];
+    // Attention checks are not explicitly handled from CSV in this version
+    
+    CONFIG.sentiments.forEach(sent => {
+        CONFIG.congruenceLevels.forEach(cong => {
+            CONFIG.truthValues.forEach(truth => {
+                const cellStimuli = cells[sent][cong][truth];
+                if (!cellStimuli) { // Should not happen if cells initialized correctly
+                    console.error(`Cell not found: ${sent}, ${cong}, ${truth}`);
+                    return; 
+                }
+                shuffle(cellStimuli);
+                if (cellStimuli.length < CONFIG.numTrialsPerCell) {
+                    console.warn(`Warning: Insufficient unique stimuli for cell: ${sent}, ${cong}, ${truth}. Needed ${CONFIG.numTrialsPerCell}, found ${cellStimuli.length}.`);
+                }
+                state.mainExperimentStimuli.push(...cellStimuli.slice(0, CONFIG.numTrialsPerCell));
+            });
+        });
+    });
+    
+    shuffle(state.mainExperimentStimuli);
+    
+    const totalExpectedMainTrials = (CONFIG.sentiments.length * CONFIG.congruenceLevels.length * CONFIG.truthValues.length * CONFIG.numTrialsPerCell);
+    if (state.mainExperimentStimuli.length < totalExpectedMainTrials) {
+         console.warn(`Final main experiment trial count is ${state.mainExperimentStimuli.length}, expected ${totalExpectedMainTrials}. Check CSV processing and cell counts.`);
+    }
+}
+
+
+// ------------------- INTRO SCREEN (Unchanged) -------------------
+async function introScreen(){
+  show(`
+    <div class="message-container">
+      <h1>${CONFIG.experimentName}</h1>
+      <p class="instructions-text">Welcome! In this study, you will be shown a series of statements. 
+      For each statement, please indicate whether you believe it is TRUE or FALSE as quickly and accurately as possible.</p>
+      
+      <label class="input-label" for="prolificID">Please enter your Prolific ID:</label>
+      <input type="text" id="prolificID" placeholder="Prolific ID" />
+      
+      <label class="input-label" for="politicalOrientation">Please select your political orientation:</label>
+      <select id="politicalOrientation">
+        <option value="">-- Select --</option>
+        <option value="Left-leaning">Left-leaning</option>
+        <option value="Right-leaning">Right-leaning</option>
+      </select>
+      <br><br>
+      <button id="startBtn">Start Experiment</button>
+    </div>
+  `);
+
+  return new Promise(resolve => {
+    document.getElementById('startBtn').onclick = () => {
+      const pid = document.getElementById('prolificID').value.trim();
+      const orientation = document.getElementById('politicalOrientation').value;
+
+      if (!pid) { alert('Please enter your Prolific ID.'); return; }
+      if (!orientation) { alert('Please select your political orientation.'); return; }
+      
+      state.prolificID = pid;
+      state.politicalOrientation = orientation;
+      resolve();
+    };
+  });
+}
+
+// ------------------- INSTRUCTIONS SCREEN (Unchanged) -------------------
+async function showInstructionsScreen() {
+    show(`
+        <div class="message-container">
+            <h2>Instructions</h2>
+            <p class="instructions-text">
+                You will first see a fixation cross (+) in the center of the screen. Please focus on it.
+                <br><br>
+                Then, a statement will appear.
+                <br><br>
+                Your task is to decide if the statement is TRUE or FALSE.
+                <br><br>
+                Press the '<b>${CONFIG.responseKeys.true_key.toUpperCase()}</b>' key if you think it's TRUE.
+                <br>
+                Press the '<b>${CONFIG.responseKeys.false_key.toUpperCase()}</b>' key if you think it's FALSE.
+                <br><br>
+                Please respond as quickly and as accurately as you can.
+                <br><br>
+                There will be a short practice session first, where you will receive feedback.
+                During the main experiment, there will be no feedback, and there will be short breaks.
+            </p>
+            <button id="startPracticeBtn">Start Practice</button>
+        </div>
+    `);
+    return new Promise(resolve => {
+        document.getElementById('startPracticeBtn').onclick = resolve;
+    });
+}
+
+
+// ------------------- CORE TRIAL LOGIC (MODIFIED FOR TEXT) -------------------
+async function runSingleTrial(stimulus, isPracticeTrial = false) {
+  state.trialCountOverall++;
+  state.currentTrialInBlock++;
+
+  // 1. Fixation Cross
+  show(`<div class="fixation-cross-container">+</div>`);
+  await sleep(CONFIG.fixationCrossDuration);
+
+  // 2. Statement Display (TEXT INSTEAD OF IMAGE)
+  show(`
+    <div class="stimulus-container">
+      <p class="stimulus-text">${stimulus.statement_text}</p> 
+      <p class="key-reminder">TRUE = '${CONFIG.responseKeys.true_key.toUpperCase()}' / FALSE = '${CONFIG.responseKeys.false_key.toUpperCase()}'</p>
+    </div>
+  `);
+  
+  rtClock = performance.now();
+
+  // 3. Get Response
+  const responseResult = await waitKeysOrTimeout([CONFIG.responseKeys.true_key, CONFIG.responseKeys.false_key], CONFIG.statementTimeoutDuration);
+  const rt = responseResult.timedOut ? CONFIG.statementTimeoutDuration : Math.round(performance.now() - rtClock);
+  
+  let participantResponse = null;
+  let accuracy = null;
+  let feedbackText = '';
+
+  if (responseResult.timedOut) {
+    participantResponse = 'TIMEOUT';
+    accuracy = null; 
+    feedbackText = "Too slow! Please respond faster.";
+    if (isPracticeTrial) { // Only show timeout feedback in practice for simplicity now
+        show(`<div class="feedback-container"><p class="feedback-text">${feedbackText}</p></div>`);
+        await sleep(CONFIG.timeoutFeedbackDuration);
+    }
+  } else {
+    participantResponse = responseResult.key === CONFIG.responseKeys.true_key ? 'True' : 'False';
+    accuracy = (participantResponse === 'True') === stimulus.truth_value ? 1 : 0;
+
+    if (isPracticeTrial) {
+      feedbackText = accuracy ? "Correct!" : "Incorrect.";
+      show(`<div class="feedback-container"><p class="feedback-text">${feedbackText}</p></div>`);
+      await sleep(CONFIG.feedbackDuration);
+    }
+    // Removed attention check feedback for now as they are not explicitly defined from this CSV
+  }
+
+  // 4. Log Data
+  const trialData = {
+    prolific_id: state.prolificID,
+    political_orientation: state.politicalOrientation,
+    trial_number_overall: state.trialCountOverall,
+    block_type: state.currentBlock,
+    trial_number_in_block: state.currentTrialInBlock,
+    statement_id: stimulus.statement_id,
+    statement_text: stimulus.statement_text, 
+    // image_filename: REMOVED
+    sentiment: stimulus.sentiment,
+    truth_value_stimulus: stimulus.truth_value ? 'TRUE' : 'FALSE', 
+    partisan_alignment_stimulus: stimulus.partisan_alignment,
+    partisan_congruence: stimulus.partisan_congruence || 'N/A', 
+    is_practice_trial: isPracticeTrial ? 1 : 0,
+    is_attention_check: stimulus.is_attention_check ? 1 : 0, // Will be 0 for these stimuli
+    response: participantResponse,
+    accuracy: accuracy,
+    rt_ms: rt,
+  };
+  log(trialData);
+
+  // 5. Inter-Trial Interval (ITI)
+  show(''); 
+  const itiDuration = getRandomInt(CONFIG.itiMinDuration, CONFIG.itiMaxDuration);
+  await sleep(itiDuration);
+}
+
+// ------------------- BLOCKS & EXPERIMENT FLOW (Unchanged logic, but practice/main stimuli are now different) -------------------
+async function runPracticeBlock() {
+    state.currentBlock = 'Practice';
+    state.currentTrialInBlock = 0;
+    show(`<div class="message-container"><h2>Practice Round</h2><p>Press SPACE to begin the practice trials.</p></div>`);
+    await waitKeys([' ']);
+
+    if (state.practiceStimuli.length === 0) {
+        show(`<div class="message-container"><p class="error-text">No practice stimuli available. Please check configuration.</p></div>`);
+        return Promise.reject("No practice stimuli");
+    }
+    for (const stimulus of state.practiceStimuli) {
+        await runSingleTrial(stimulus, true);
+    }
+
+    show(`<div class="message-container"><h2>End of Practice</h2><p>You have completed the practice round.</p><button id="startMainBtn">Start Main Experiment</button></div>`);
+    return new Promise(resolve => {
+        document.getElementById('startMainBtn').onclick = resolve;
+    });
+}
+
+async function runMainExperimentBlock() {
+    state.currentBlock = 'MainExperiment';
+    state.currentTrialInBlock = 0;
+    show(`<div class="message-container"><h2>Main Experiment</h2><p>The main experiment will now begin. Remember to respond as quickly and accurately as possible.<br>There will be short breaks periodically.</p><p>Press SPACE to begin.</p></div>`);
+    await waitKeys([' ']);
+    
+    if (state.mainExperimentStimuli.length === 0) {
+        show(`<div class="message-container"><p class="error-text">No main experiment stimuli available. Please check configuration and CSV processing.</p></div>`);
+        return Promise.reject("No main stimuli");
+    }
+    for (let i = 0; i < state.mainExperimentStimuli.length; i++) {
+        const stimulus = state.mainExperimentStimuli[i];
+        await runSingleTrial(stimulus, false);
+
+        if ((i + 1) < state.mainExperimentStimuli.length && (i + 1) % CONFIG.trialsPerBreak === 0) {
+            show(`<div class="message-container"><h2>Break Time!</h2><p>Please take a short break. Press SPACE when you are ready to continue.</p></div>`);
+            await waitKeys([' ']);
+            show(`<div class="fixation-cross-container">+</div>`); 
+            await sleep(1000); 
+        }
+    }
+}
+
+function finishExperiment(){ // Unchanged
+  const csv = toCSV(state.data);
+  const filename  = `${CONFIG.experimentName.replace(/\s+/g, '_')}_${state.prolificID}_${new Date().toISOString().slice(0,10)}.csv`;
+  
+  show('<div class="message-container"><h2>Uploading your data…</h2><p>Please wait. Do not close this window.</p></div>');
+  
+  uploadCSV(filename, csv)
+    .then(response => {
+      if (!response.ok) {
+        console.error('Upload failed with status:', response.status, response.statusText);
+        return response.text().then(text => {throw new Error(`Upload failed: ${response.statusText} - ${text}`)});
+      }
+      return response.json();
+    })
+    .then(result => {
+      console.log('Upload successful:', result);
+      show('<div class="message-container"><h2>Experiment Complete!</h2><p>Thank you for your participation. Your data has been successfully uploaded. You may now close this window.</p></div>');
+    })
+    .catch(err => {
+      console.error('Data upload failed:', err);
+      if (CONFIG.fallbackDownload) {
+        show(`<div class="message-container">
+                <h2>Data Upload Error</h2>
+                <p class="error-text">There was an error uploading your data. 
+                A CSV file of your data will be downloaded to your computer instead.</p>
+                <p><b>Please ensure you send this downloaded file ('${filename}') to the researcher.</b></p>
+                <p>Click the button below if the download doesn't start automatically.</p>
+                <button id="manualDownloadBtn">Download Data Manually</button>
+                <p>You may close this window after the download is complete.</p>
+              </div>`);
+        document.getElementById('manualDownloadBtn').onclick = () => downloadCSV(csv, filename);
+        downloadCSV(csv, filename); 
+      } else {
+        show(`<div class="message-container">
+                <h2>Critical Error</h2>
+                <p class="error-text">Sorry, your data could not be saved due to a network error, and local download is disabled.</p>
+                <p>Please take a screenshot of this page (including any console errors if possible - Ctrl+Shift+J or Cmd+Opt+J) and contact the researcher.</p>
+                <p>Error details: ${err.message}</p>
+              </div>`);
+      }
+    });
+}
+
+// ------------------- LAUNCH -------------------
+(async () => {
+  try {
+    show('<h2>Loading experiment configuration...</h2>');
+    await loadCSVStimuli(); // This now processes your specific CSV into the allStimuli array
+    
+    await introScreen(); 
+    
+    show('<h2>Preparing experiment trials...</h2>');
+    prepareExperimentTrials(); // Selects practice, builds main experiment trial list
+
+    // NO IMAGE PRELOADING
+    // await preloadImages(allImagesToPreload.filter(s => s.image_filename)); 
+
+    await showInstructionsScreen();
+    await runPracticeBlock();
+    await runMainExperimentBlock();
+    
+    finishExperiment();
+
+  } catch (e) {
+    console.error("Experiment Error:", e);
+    stage.innerHTML = `
+        <div class="message-container">
+            <h2 style="color:red;">An Error Occurred</h2>
+            <p class="error-text">Unfortunately, the experiment encountered a problem and cannot continue.</p>
+            <p><b>Error message:</b> ${e.message}</p>
+            <p>Please copy this error message, and any details from the browser console (Ctrl+Shift+J or Cmd+Opt+J), and contact the researcher.</p>
+            <pre style="text-align:left; background-color:#333; padding:10px; border-radius:5px; max-height:200px; overflow-y:auto;">${e.stack || ''}</pre>
+        </div>`;
+  }
+})();
+</script>
+</body>
+</html>
