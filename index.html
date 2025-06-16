@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Truth Judgment Task (Text)</title>
+  <title>Truth Judgment Task (Sentiment Group Filtered)</title>
 
   <style>
     :root {
@@ -54,18 +54,17 @@
       height:6em; 
       display:flex;align-items:center;justify-content:center;
     }
-    .stimulus-container, .feedback-container, .message-container {
+    .stimulus-container, .message-container {
       min-height:12em; 
       display:flex;flex-direction:column;align-items:center;justify-content:center;
       padding: 1em;
     }
-    .stimulus-text { /* New style for text stimuli */
-      font-size: 1.8rem; /* Adjust as needed */
+    .stimulus-text { 
+      font-size: 1.8rem; 
       line-height: 1.4;
       margin-bottom: 1em;
-      max-width: 90%; /* Ensure text wraps nicely */
+      max-width: 90%; 
     }
-    .feedback-text { font-size:1.2rem; }
     .instructions-text, .message-text { font-size:1.1rem; line-height:1.6; margin-bottom:1em;}
     .key-reminder { font-size:1rem; color: #ccc; margin-top: 1em;}
     .loading, .error-text { font-size:1.2rem; color: #aaa; }
@@ -78,32 +77,31 @@
 <script>
 // -------------------- CONFIG --------------------
 const CONFIG = {
-  experimentName         : 'Political Sentiment Truth Judgment Task (Text)',
-  csvFile                : 'stimulus_master.csv', // Will be processed according to the new structure
+  experimentName         : 'Political Sentiment Truth Judgment Task (Sentiment Group Filtered)', // Updated name
+  csvFile                : 'stimulus_master.csv', 
   responseKeys           : { true_key: 'f', false_key: 'j' }, 
   dataPipeID             : 'qWHxwr6D720q', 
   fallbackDownload       : true, 
   
   fixationCrossDuration  : 500,
   statementTimeoutDuration: 15000,
-  feedbackDuration       : 1500, 
-  timeoutFeedbackDuration: 2000,
   itiMinDuration         : 500,
   itiMaxDuration         : 1000,
   
-  numPracticeTrials      : 6, // Adjusted, can be tuned
-  numTrialsPerCell       : 8,    
-  trialsPerBreak         : 30,   
+  numPracticeTrials      : 4, // Adjusted, as fewer overall stimuli per participant might be available for practice
+  numTrialsPerCell       : 8, // This now applies to 4 cells (1 chosen sentiment x 2 truth x 2 congruence)
+  trialsPerBreak         : 16, // Adjusted, as total trials per participant are now fewer (e.g., 32 main trials)
 
-  sentiments             : ['Positive', 'Neutral', 'Negative'], // These must match how they're assigned from CSV
+  // sentiments, truthValues, congruenceLevels are still used for overall structure definition
+  sentiments             : ['Positive', 'Neutral', 'Negative'],
   truthValues            : ['True', 'False'], 
   congruenceLevels       : ['Congruent', 'Incongruent'],
 
-  masterHeader : [ // image_filename removed
-    'prolific_id', 'political_orientation', 
+  masterHeader : [ 
+    'prolific_id', 'political_orientation', 'participant_sentiment_group', // Added participant_sentiment_group
     'trial_number_overall', 'block_type', 'trial_number_in_block',
     'statement_id', 'statement_text', 
-    'sentiment', 'truth_value_stimulus', 'partisan_alignment_stimulus', 'partisan_congruence',
+    'stimulus_sentiment', 'truth_value_stimulus', 'partisan_alignment_stimulus', 'partisan_congruence', // Renamed 'sentiment' to 'stimulus_sentiment' for clarity
     'is_practice_trial', 'is_attention_check',
     'response', 'accuracy', 'rt_ms',
     'timestamp'
@@ -112,15 +110,17 @@ const CONFIG = {
 
 // ------------------------ STATE OBJECT ------------------------
 const state = {
-  prolificID          : '',
-  politicalOrientation: '',
-  allStimuli          : [], 
-  practiceStimuli     : [], 
-  mainExperimentStimuli: [],
-  data                : [],
-  trialCountOverall   : 0,
-  currentBlock        : '',
-  currentTrialInBlock : 0,
+  prolificID              : '',
+  politicalOrientation    : '',
+  participantSentimentGroup: '', // New state variable
+  
+  allStimuli              : [], 
+  practiceStimuli         : [], 
+  mainExperimentStimuli   : [],
+  data                    : [],
+  trialCountOverall       : 0,
+  currentBlock            : '',
+  currentTrialInBlock     : 0,
 };
 
 const stage = document.getElementById('stage');
@@ -131,8 +131,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shuffle = arr => { for(let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; };
 const show = html => stage.innerHTML = html;
 const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
-// IMAGE PRELOADER REMOVED
 
 // ------------------------ DATA LOGGING FUNCTIONS ------------------------
 function log(dataRow) {
@@ -184,7 +182,7 @@ function downloadCSV(csvData, filename){
   URL.revokeObjectURL(url);
 }
 
-// ------------------- STIMULUS LOADER (NEW LOGIC) -------------------
+// ------------------- STIMULUS LOADER (Unchanged - loads all, filtering happens later) -------------------
 async function loadCSVStimuli(){
   const response = await fetch(CONFIG.csvFile);
   if (!response.ok) throw new Error(`Failed to load ${CONFIG.csvFile}: ${response.statusText}`);
@@ -197,9 +195,8 @@ async function loadCSVStimuli(){
   }
 
   const headerLine = lines.shift();
-  const header = headerLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase()); // lowercasing headers for easier matching
+  const header = headerLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
 
-  // Expected headers from user's CSV
   const expectedCsvHeaders = ['item', 'positive', 'neutral', 'negative', 'veracity', 'party'];
   for (const reqHeader of expectedCsvHeaders) {
       if (!header.includes(reqHeader)) {
@@ -245,7 +242,7 @@ async function loadCSVStimuli(){
         partisanAlignment = 'Left';
     } else {
         console.warn(`Unknown party '${rawStim.party}' for Item ${itemNum}. Defaulting to Neutral/Undefined.`);
-        partisanAlignment = 'Neutral'; // Or handle as error
+        partisanAlignment = 'Neutral'; 
     }
 
     const sentimentsToProcess = ['positive', 'neutral', 'negative'];
@@ -255,23 +252,20 @@ async function loadCSVStimuli(){
             state.allStimuli.push({
                 statement_id: `item${itemNum}_${sentimentType}`,
                 statement_text: statementText,
-                sentiment: sentimentType.charAt(0).toUpperCase() + sentimentType.slice(1), // Capitalize: Positive, Neutral, Negative
+                stimulus_sentiment: sentimentType.charAt(0).toUpperCase() + sentimentType.slice(1), 
                 truth_value: truthValue,
                 partisan_alignment: partisanAlignment,
-                is_practice_stimulus: false, // Will be determined later
-                is_attention_check: false,   // Not defined in this CSV structure
+                is_practice_stimulus: false, 
+                is_attention_check: false,   
             });
         } else {
             console.warn(`Missing '${sentimentType}' statement for Item ${itemNum}.`);
         }
     });
   });
-
-  console.log(`Generated ${state.allStimuli.length} stimuli from CSV.`);
-  const totalCells = CONFIG.sentiments.length * CONFIG.congruenceLevels.length * CONFIG.truthValues.length;
-  const minNeededForMain = totalCells * CONFIG.numTrialsPerCell;
-   if (state.allStimuli.length < minNeededForMain + CONFIG.numPracticeTrials) {
-    console.warn(`Potentially insufficient total stimuli generated (${state.allStimuli.length}). Needed at least ${minNeededForMain + CONFIG.numPracticeTrials} for main task and practice.`);
+  // Initial check for total stimuli loaded before filtering
+  if (state.allStimuli.length < (CONFIG.numTrialsPerCell * 4) + CONFIG.numPracticeTrials) { // 4 cells for the chosen sentiment
+    console.warn(`Potentially insufficient total stimuli loaded from CSV (${state.allStimuli.length}) before sentiment filtering. More might be needed depending on sentiment group distribution.`);
   }
 }
 
@@ -308,37 +302,52 @@ function waitKeysOrTimeout(validKeys, timeoutMs) {
   });
 }
 
-// ------------------- STIMULUS PREPARATION & COUNTERBALANCING -------------------
+// ------------------- STIMULUS PREPARATION & COUNTERBALANCING (MODIFIED FOR SENTIMENT GROUP) -------------------
 function prepareExperimentTrials() {
     if (state.allStimuli.length === 0) {
-        throw new Error("No stimuli loaded or generated. Cannot prepare trials.");
+        throw new Error("No stimuli loaded. Cannot prepare trials.");
     }
-    shuffle(state.allStimuli); 
+    if (!state.participantSentimentGroup) {
+        throw new Error("Participant sentiment group not selected. Cannot prepare trials.");
+    }
 
-    // 1. Select Practice Stimuli Randomly
-    if (state.allStimuli.length < CONFIG.numPracticeTrials) {
-        throw new Error(`Not enough total stimuli (${state.allStimuli.length}) to select ${CONFIG.numPracticeTrials} for practice.`);
+    // 1. Filter all stimuli by participant's chosen sentiment group
+    const sentimentFilteredStimuli = state.allStimuli.filter(
+        stim => stim.stimulus_sentiment === state.participantSentimentGroup
+    );
+    
+    if (sentimentFilteredStimuli.length === 0) {
+        throw new Error(`No stimuli found for the selected sentiment group: '${state.participantSentimentGroup}'. Check CSV content and distribution.`);
     }
-    state.practiceStimuli = state.allStimuli.slice(0, CONFIG.numPracticeTrials);
-    // Mark them as practice and ensure they are not re-used in main task easily if we sample from a copy
+    shuffle(sentimentFilteredStimuli); 
+
+    // 2. Select Practice Stimuli from the sentiment-filtered pool
+    if (sentimentFilteredStimuli.length < CONFIG.numPracticeTrials) {
+        throw new Error(`Not enough stimuli in sentiment group '${state.participantSentimentGroup}' (${sentimentFilteredStimuli.length}) to select ${CONFIG.numPracticeTrials} for practice.`);
+    }
+    state.practiceStimuli = sentimentFilteredStimuli.slice(0, CONFIG.numPracticeTrials);
     state.practiceStimuli.forEach(s => s.is_practice_stimulus = true);
     
-    const availableForMain = state.allStimuli.filter(s => !state.practiceStimuli.find(p => p.statement_id === s.statement_id));
-    shuffle(availableForMain); // Shuffle the pool for main experiment
+    // Remaining stimuli for the main task, also from the sentiment-filtered pool
+    const availableForMain = sentimentFilteredStimuli.filter(s => !state.practiceStimuli.find(p => p.statement_id === s.statement_id));
+    shuffle(availableForMain);
 
-    // 2. Assign Congruence and Prepare Cells for Main Experiment
+    // 3. Assign Congruence and Prepare Cells for Main Experiment (within the chosen sentiment)
     const cells = {}; 
-    CONFIG.sentiments.forEach(sent => {
-        cells[sent] = {};
-        CONFIG.congruenceLevels.forEach(cong => {
-            cells[sent][cong] = {};
-            CONFIG.truthValues.forEach(truth => { 
-                cells[sent][cong][truth] = [];
-            });
+    // Only create cells for the participant's chosen sentiment
+    const chosenSentiment = state.participantSentimentGroup;
+    cells[chosenSentiment] = {};
+    CONFIG.congruenceLevels.forEach(cong => {
+        cells[chosenSentiment][cong] = {};
+        CONFIG.truthValues.forEach(truth => { 
+            cells[chosenSentiment][cong][truth] = [];
         });
     });
 
     availableForMain.forEach(stim => {
+        // Ensure stimulus sentiment matches participant's chosen group (should already be true due to initial filter)
+        if (stim.stimulus_sentiment !== chosenSentiment) return; 
+
         let congruence;
         if (stim.partisan_alignment === 'Neutral' || !stim.partisan_alignment) { 
             congruence = Math.random() < 0.5 ? 'Congruent' : 'Incongruent'; 
@@ -347,49 +356,46 @@ function prepareExperimentTrials() {
         } else if (state.politicalOrientation === 'Right-leaning') {
             congruence = stim.partisan_alignment === 'Right' ? 'Congruent' : 'Incongruent';
         } else {
-            console.error("Political orientation not set or invalid for congruence assignment.");
             congruence = 'ErrorCongruence'; 
         }
         
         const truthKey = stim.truth_value ? 'True' : 'False'; 
-        if (cells[stim.sentiment] && cells[stim.sentiment][congruence] && cells[stim.sentiment][congruence][truthKey]) {
-             cells[stim.sentiment][congruence][truthKey].push({...stim, partisan_congruence: congruence});
+        // Cell structure is now cells[CHOSEN_SENTIMENT][CONGRUENCE][TRUTH_VALUE]
+        if (cells[chosenSentiment][congruence] && cells[chosenSentiment][congruence][truthKey]) {
+             cells[chosenSentiment][congruence][truthKey].push({...stim, partisan_congruence: congruence});
         } else {
-            console.warn(`Could not categorize stimulus for cell assignment: ID ${stim.statement_id}, Sentiment ${stim.sentiment}, Congruence ${congruence}, Truth ${truthKey}, Partisan Alignment ${stim.partisan_alignment}`);
+            console.warn(`Could not categorize stimulus for cell: ID ${stim.statement_id}, Sentiment ${stim.stimulus_sentiment}, Congruence ${congruence}, Truth ${truthKey}`);
         }
     });
 
-    // 3. Sample from Cells
+    // 4. Sample from Cells (now only 4 cells per participant)
     state.mainExperimentStimuli = [];
-    // Attention checks are not explicitly handled from CSV in this version
-    
-    CONFIG.sentiments.forEach(sent => {
-        CONFIG.congruenceLevels.forEach(cong => {
-            CONFIG.truthValues.forEach(truth => {
-                const cellStimuli = cells[sent][cong][truth];
-                if (!cellStimuli) { // Should not happen if cells initialized correctly
-                    console.error(`Cell not found: ${sent}, ${cong}, ${truth}`);
-                    return; 
-                }
-                shuffle(cellStimuli);
-                if (cellStimuli.length < CONFIG.numTrialsPerCell) {
-                    console.warn(`Warning: Insufficient unique stimuli for cell: ${sent}, ${cong}, ${truth}. Needed ${CONFIG.numTrialsPerCell}, found ${cellStimuli.length}.`);
-                }
-                state.mainExperimentStimuli.push(...cellStimuli.slice(0, CONFIG.numTrialsPerCell));
-            });
+    CONFIG.congruenceLevels.forEach(cong => {
+        CONFIG.truthValues.forEach(truth => {
+            const cellStimuli = cells[chosenSentiment][cong][truth];
+            if (!cellStimuli) { 
+                console.error(`Cell not found: ${chosenSentiment}, ${cong}, ${truth}`);
+                return; 
+            }
+            shuffle(cellStimuli);
+            if (cellStimuli.length < CONFIG.numTrialsPerCell) {
+                console.warn(`Warning: Insufficient unique stimuli for cell: ${chosenSentiment}, ${cong}, ${truth}. Needed ${CONFIG.numTrialsPerCell}, found ${cellStimuli.length}.`);
+            }
+            state.mainExperimentStimuli.push(...cellStimuli.slice(0, CONFIG.numTrialsPerCell));
         });
     });
     
     shuffle(state.mainExperimentStimuli);
     
-    const totalExpectedMainTrials = (CONFIG.sentiments.length * CONFIG.congruenceLevels.length * CONFIG.truthValues.length * CONFIG.numTrialsPerCell);
+    // Total expected main trials is now 4 cells * numTrialsPerCell
+    const totalExpectedMainTrials = CONFIG.congruenceLevels.length * CONFIG.truthValues.length * CONFIG.numTrialsPerCell;
     if (state.mainExperimentStimuli.length < totalExpectedMainTrials) {
-         console.warn(`Final main experiment trial count is ${state.mainExperimentStimuli.length}, expected ${totalExpectedMainTrials}. Check CSV processing and cell counts.`);
+         console.warn(`Final main experiment trial count for sentiment '${chosenSentiment}' is ${state.mainExperimentStimuli.length}, expected ${totalExpectedMainTrials}.`);
     }
 }
 
 
-// ------------------- INTRO SCREEN (Unchanged) -------------------
+// ------------------- INTRO SCREEN (MODIFIED FOR SENTIMENT GROUP) -------------------
 async function introScreen(){
   show(`
     <div class="message-container">
@@ -406,6 +412,14 @@ async function introScreen(){
         <option value="Left-leaning">Left-leaning</option>
         <option value="Right-leaning">Right-leaning</option>
       </select>
+
+      <label class="input-label" for="participantSentimentGroup">Please select your sentiment group focus for this session:</label>
+      <select id="participantSentimentGroup">
+        <option value="">-- Select --</option>
+        <option value="Positive">Positive Statements</option>
+        <option value="Neutral">Neutral Statements</option>
+        <option value="Negative">Negative Statements</option>
+      </select>
       <br><br>
       <button id="startBtn">Start Experiment</button>
     </div>
@@ -415,12 +429,16 @@ async function introScreen(){
     document.getElementById('startBtn').onclick = () => {
       const pid = document.getElementById('prolificID').value.trim();
       const orientation = document.getElementById('politicalOrientation').value;
+      const sentimentGroup = document.getElementById('participantSentimentGroup').value;
+
 
       if (!pid) { alert('Please enter your Prolific ID.'); return; }
       if (!orientation) { alert('Please select your political orientation.'); return; }
+      if (!sentimentGroup) { alert('Please select your sentiment group focus.'); return; }
       
       state.prolificID = pid;
       state.politicalOrientation = orientation;
+      state.participantSentimentGroup = sentimentGroup; // Store the selected sentiment group
       resolve();
     };
   });
@@ -444,7 +462,7 @@ async function showInstructionsScreen() {
                 <br><br>
                 Please respond as quickly and as accurately as you can.
                 <br><br>
-                There will be a short practice session first, where you will receive feedback.
+                There will be a short practice session first. 
                 During the main experiment, there will be no feedback, and there will be short breaks.
             </p>
             <button id="startPracticeBtn">Start Practice</button>
@@ -456,7 +474,7 @@ async function showInstructionsScreen() {
 }
 
 
-// ------------------- CORE TRIAL LOGIC (MODIFIED FOR TEXT) -------------------
+// ------------------- CORE TRIAL LOGIC (MODIFIED FOR LOGGING SENTIMENT GROUP) -------------------
 async function runSingleTrial(stimulus, isPracticeTrial = false) {
   state.trialCountOverall++;
   state.currentTrialInBlock++;
@@ -465,7 +483,7 @@ async function runSingleTrial(stimulus, isPracticeTrial = false) {
   show(`<div class="fixation-cross-container">+</div>`);
   await sleep(CONFIG.fixationCrossDuration);
 
-  // 2. Statement Display (TEXT INSTEAD OF IMAGE)
+  // 2. Statement Display
   show(`
     <div class="stimulus-container">
       <p class="stimulus-text">${stimulus.statement_text}</p> 
@@ -481,44 +499,31 @@ async function runSingleTrial(stimulus, isPracticeTrial = false) {
   
   let participantResponse = null;
   let accuracy = null;
-  let feedbackText = '';
 
   if (responseResult.timedOut) {
     participantResponse = 'TIMEOUT';
     accuracy = null; 
-    feedbackText = "Too slow! Please respond faster.";
-    if (isPracticeTrial) { // Only show timeout feedback in practice for simplicity now
-        show(`<div class="feedback-container"><p class="feedback-text">${feedbackText}</p></div>`);
-        await sleep(CONFIG.timeoutFeedbackDuration);
-    }
   } else {
     participantResponse = responseResult.key === CONFIG.responseKeys.true_key ? 'True' : 'False';
     accuracy = (participantResponse === 'True') === stimulus.truth_value ? 1 : 0;
-
-    if (isPracticeTrial) {
-      feedbackText = accuracy ? "Correct!" : "Incorrect.";
-      show(`<div class="feedback-container"><p class="feedback-text">${feedbackText}</p></div>`);
-      await sleep(CONFIG.feedbackDuration);
-    }
-    // Removed attention check feedback for now as they are not explicitly defined from this CSV
   }
 
   // 4. Log Data
   const trialData = {
     prolific_id: state.prolificID,
     political_orientation: state.politicalOrientation,
+    participant_sentiment_group: state.participantSentimentGroup, // Log selected sentiment group
     trial_number_overall: state.trialCountOverall,
     block_type: state.currentBlock,
     trial_number_in_block: state.currentTrialInBlock,
     statement_id: stimulus.statement_id,
     statement_text: stimulus.statement_text, 
-    // image_filename: REMOVED
-    sentiment: stimulus.sentiment,
+    stimulus_sentiment: stimulus.stimulus_sentiment, // This is the sentiment of the actual statement
     truth_value_stimulus: stimulus.truth_value ? 'TRUE' : 'FALSE', 
     partisan_alignment_stimulus: stimulus.partisan_alignment,
     partisan_congruence: stimulus.partisan_congruence || 'N/A', 
     is_practice_trial: isPracticeTrial ? 1 : 0,
-    is_attention_check: stimulus.is_attention_check ? 1 : 0, // Will be 0 for these stimuli
+    is_attention_check: stimulus.is_attention_check ? 1 : 0, 
     response: participantResponse,
     accuracy: accuracy,
     rt_ms: rt,
@@ -531,16 +536,16 @@ async function runSingleTrial(stimulus, isPracticeTrial = false) {
   await sleep(itiDuration);
 }
 
-// ------------------- BLOCKS & EXPERIMENT FLOW (Unchanged logic, but practice/main stimuli are now different) -------------------
+// ------------------- BLOCKS & EXPERIMENT FLOW (Unchanged logic) -------------------
 async function runPracticeBlock() {
     state.currentBlock = 'Practice';
     state.currentTrialInBlock = 0;
-    show(`<div class="message-container"><h2>Practice Round</h2><p>Press SPACE to begin the practice trials.</p></div>`);
+    show(`<div class="message-container"><h2>Practice Round</h2><p>You will now see a few practice statements.</p><p>Press SPACE to begin.</p></div>`);
     await waitKeys([' ']);
 
     if (state.practiceStimuli.length === 0) {
-        show(`<div class="message-container"><p class="error-text">No practice stimuli available. Please check configuration.</p></div>`);
-        return Promise.reject("No practice stimuli");
+        show(`<div class="message-container"><p class="error-text">No practice stimuli available for the selected sentiment group. Please check configuration.</p></div>`);
+        return Promise.reject("No practice stimuli for sentiment group");
     }
     for (const stimulus of state.practiceStimuli) {
         await runSingleTrial(stimulus, true);
@@ -559,8 +564,8 @@ async function runMainExperimentBlock() {
     await waitKeys([' ']);
     
     if (state.mainExperimentStimuli.length === 0) {
-        show(`<div class="message-container"><p class="error-text">No main experiment stimuli available. Please check configuration and CSV processing.</p></div>`);
-        return Promise.reject("No main stimuli");
+        show(`<div class="message-container"><p class="error-text">No main experiment stimuli available for the selected sentiment group. Please check configuration and CSV processing.</p></div>`);
+        return Promise.reject("No main stimuli for sentiment group");
     }
     for (let i = 0; i < state.mainExperimentStimuli.length; i++) {
         const stimulus = state.mainExperimentStimuli[i];
@@ -577,7 +582,7 @@ async function runMainExperimentBlock() {
 
 function finishExperiment(){ // Unchanged
   const csv = toCSV(state.data);
-  const filename  = `${CONFIG.experimentName.replace(/\s+/g, '_')}_${state.prolificID}_${new Date().toISOString().slice(0,10)}.csv`;
+  const filename  = `${CONFIG.experimentName.replace(/\s+/g, '_')}_${state.prolificID}_${state.participantSentimentGroup}_${new Date().toISOString().slice(0,10)}.csv`; // Added sentiment group to filename
   
   show('<div class="message-container"><h2>Uploading your data…</h2><p>Please wait. Do not close this window.</p></div>');
   
@@ -622,15 +627,12 @@ function finishExperiment(){ // Unchanged
 (async () => {
   try {
     show('<h2>Loading experiment configuration...</h2>');
-    await loadCSVStimuli(); // This now processes your specific CSV into the allStimuli array
+    await loadCSVStimuli(); 
     
-    await introScreen(); 
+    await introScreen(); // Collects Prolific ID, political orientation, AND participant sentiment group
     
     show('<h2>Preparing experiment trials...</h2>');
-    prepareExperimentTrials(); // Selects practice, builds main experiment trial list
-
-    // NO IMAGE PRELOADING
-    // await preloadImages(allImagesToPreload.filter(s => s.image_filename)); 
+    prepareExperimentTrials(); // Now filters by sentiment group and prepares 4 cells
 
     await showInstructionsScreen();
     await runPracticeBlock();
