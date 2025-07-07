@@ -209,6 +209,72 @@ async function loadCSVStimuli(){
   const headerLine = lines.shift();
   const header = headerLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
 
+  const expectedCsvHeaders = ['item', 'claimtext', 'veracity'];
+  for (const reqHeader of expectedCsvHeaders) {
+      if (!header.includes(reqHeader)) {
+          throw new Error(`CSV file is missing required header: '${reqHeader}'. Found headers: ${header.join(', ')}`);
+      }
+  }
+  
+  lines.forEach((line, index) => {
+    if (line.trim() === "") return; 
+
+    let fields = [];
+    if (delimiter === ",") {
+        let current = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"' && (i === 0 || line[i-1] !== '\\')) { 
+                inQuotes = !inQuotes;
+            } else if (char === delimiter && !inQuotes) {
+                fields.push(current.trim().replace(/^"|"$/g, '')); current = '';
+            } else {
+                current += char;
+            }
+        }
+        fields.push(current.trim().replace(/^"|"$/g, ''));
+    } else { 
+        fields = line.split(delimiter).map(f => f.trim().replace(/^"|"$/g, ''));
+    }
+
+    const rawStim = {};
+    header.forEach((h, i) => rawStim[h] = (fields[i] !== undefined ? fields[i] : '').trim());
+
+    const itemNum = rawStim.item;
+    if (!itemNum) {
+        console.warn(`Skipping CSV row ${index + 2} due to missing 'Item' number.`);
+        return;
+    }
+
+    // Convert "Accurate" to true and "Misinformation" to false
+    const truthValue = rawStim.veracity.toLowerCase() === 'accurate';
+    
+    // Since there's no party information, assign a neutral value
+    const partisanAlignment = 'Neutral';
+
+    const statementText = rawStim.claimtext;
+    if (statementText) {
+        state.allStimuli.push({
+            statement_id: itemNum,
+            statement_text: statementText,
+            truth_value: truthValue,
+            partisan_alignment: partisanAlignment,
+            is_practice_stimulus: false, 
+            is_attention_check: false,   
+        });
+    } else {
+        console.warn(`Missing statement for Item ${itemNum}.`);
+    }
+  });
+  
+  if (state.allStimuli.length === 0) {
+    throw new Error("No stimuli loaded from CSV. Check file format and content.");
+  }
+}
+
+  const headerLine = lines.shift();
+  const header = headerLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
+
   const expectedCsvHeaders = ['item', 'statement', 'veracity', 'party'];
   for (const reqHeader of expectedCsvHeaders) {
       if (!header.includes(reqHeader)) {
